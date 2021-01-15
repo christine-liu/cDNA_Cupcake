@@ -26,7 +26,7 @@ def read_group_info(group_filename):
             d[m] = pbid
     return d
 
-def collate_gene_info(group_filename, csv_filename, class_filename, output_filename, ontarget_filename=None, dedup_ORF_prefix=None, no_extra_base=False):
+def collate_gene_info(group_filename, csv_filename, class_filename, output_filename, ontarget_filename=None, dedup_ORF_prefix=None, no_extra_base=False, SNARE=False):
     """
     <id>, <pbid>, <length>, <transcript>, <gene>, <category>, <ontarget Y|N|NA>, <ORFgroup NA|NoORF|groupID>, <UMI>, <BC>
     """
@@ -49,33 +49,62 @@ def collate_gene_info(group_filename, csv_filename, class_filename, output_filen
     writer = DictWriter(f, FIELDS, delimiter='\t')
     writer.writeheader()
 
-    for ccs_id, pbid in group_info.items():
-        if pbid not in sqanti_info:
-            print("ignoring ID {0} cuz not in classification file.".format(pbid), file=sys.stderr)
-            continue
-        if no_extra_base and  umi_bc_info[ccs_id]['extra']!='NA':
-            print("ignoring ID {0} cuz extra bases.".format(pbid), file=sys.stderr)
-            continue
-        rec = {'id': ccs_id, 'pbid': pbid}
-        rec['length'] = sqanti_info[pbid]['length']
-        rec['category'] = sqanti_info[pbid]['structural_category']
-        rec['transcript'] = sqanti_info[pbid]['associated_transcript']
-        rec['gene'] = sqanti_info[pbid]['associated_gene']
-        rec['UMI'] = umi_bc_info[ccs_id]['UMI']
-        rec['BC'] = umi_bc_info[ccs_id]['BC']
-        if ontarget_filename is None:
-            rec['ontarget'] = 'NA'
-        else:
-            rec['ontarget'] = 'Y' if ontarget_info[pbid]['genes']!='' else 'N'
-        if dedup_ORF_prefix is None:
-            rec['ORFgroup'] = 'NA'
-        else:
-            if pbid not in dedup_ORF_info:
-                rec['ORFgroup'] = 'NoORF'
+    if SNARE:
+        for ccs_id, pbid in group_info.items():
+            if pbid not in sqanti_info:
+                print("ignoring ID {0} cuz not in classification file.".format(pbid), file=sys.stderr)
+                continue
+            if no_extra_base and (umi_bc_info[ccs_id]['extra1']!='NA' or umi_bc_info[ccs_id]['extra2']!="NA" or umi_bc_info[ccs_id]['extra3']!="NA"):
+                print("ignoring ID {0} cuz extra bases.".format(pbid), file=sys.stderr)
+                continue
+            rec = {'id': ccs_id, 'pbid': pbid}
+            rec['length'] = sqanti_info[pbid]['length']
+            rec['category'] = sqanti_info[pbid]['structural_category']
+            rec['transcript'] = sqanti_info[pbid]['associated_transcript']
+            rec['gene'] = sqanti_info[pbid]['associated_gene']
+            rec['UMI'] = umi_bc_info[ccs_id]['UMI']
+            rec['BC'] = umi_bc_info[ccs_id]['BC1']+umi_bc_info[ccs_id]['BC2']+umi_bc_info[ccs_id]['BC3']
+            if ontarget_filename is None:
+                rec['ontarget'] = 'NA'
             else:
-                rec['ORFgroup'] = dedup_ORF_info[pbid]
+                rec['ontarget'] = 'Y' if ontarget_info[pbid]['genes']!='' else 'N'
+            if dedup_ORF_prefix is None:
+                rec['ORFgroup'] = 'NA'
+            else:
+                if pbid not in dedup_ORF_info:
+                    rec['ORFgroup'] = 'NoORF'
+                else:
+                    rec['ORFgroup'] = dedup_ORF_info[pbid]
 
-        writer.writerow(rec)
+            writer.writerow(rec)
+    else:
+        for ccs_id, pbid in group_info.items():
+            if pbid not in sqanti_info:
+                print("ignoring ID {0} cuz not in classification file.".format(pbid), file=sys.stderr)
+                continue
+            if no_extra_base and  umi_bc_info[ccs_id]['extra']!='NA':
+                print("ignoring ID {0} cuz extra bases.".format(pbid), file=sys.stderr)
+                continue
+            rec = {'id': ccs_id, 'pbid': pbid}
+            rec['length'] = sqanti_info[pbid]['length']
+            rec['category'] = sqanti_info[pbid]['structural_category']
+            rec['transcript'] = sqanti_info[pbid]['associated_transcript']
+            rec['gene'] = sqanti_info[pbid]['associated_gene']
+            rec['UMI'] = umi_bc_info[ccs_id]['UMI']
+            rec['BC'] = umi_bc_info[ccs_id]['BC']
+            if ontarget_filename is None:
+                rec['ontarget'] = 'NA'
+            else:
+                rec['ontarget'] = 'Y' if ontarget_info[pbid]['genes']!='' else 'N'
+            if dedup_ORF_prefix is None:
+                rec['ORFgroup'] = 'NA'
+            else:
+                if pbid not in dedup_ORF_info:
+                    rec['ORFgroup'] = 'NoORF'
+                else:
+                    rec['ORFgroup'] = dedup_ORF_info[pbid]
+
+            writer.writerow(rec)
 
     f.close()
 
@@ -91,6 +120,7 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--ontarget_filename", help="(Optional) on target information text")
     parser.add_argument("-p", "--dedup_ORF_prefix", help="(Optional) dedup-ed ORF group prefix, must have <pre>.faa and <pre>.group.txt")
     parser.add_argument("--no-extra-base", dest='no_extra_base', action="store_true", default=False, help="Drop all reads where there are extra bases")
+    parser.add_argument("--SNARE", dest='SNARE', action="store_true", default=False, help="for use with SNARE-seq output")
 
     args = parser.parse_args()
 
@@ -122,4 +152,4 @@ if __name__ == "__main__":
             print("Dedup {0}.faa not found. Abort!".format(args.dedup_ORF_prefix), file=sys.stderr)
             sys.exit(-1)
 
-    collate_gene_info(args.group_filename, args.csv_filename, args.class_filename, args.output_filename, args.ontarget_filename, args.dedup_ORF_prefix, args.no_extra_base)
+    collate_gene_info(args.group_filename, args.csv_filename, args.class_filename, args.output_filename, args.ontarget_filename, args.dedup_ORF_prefix, args.no_extra_base, args.SNARE)

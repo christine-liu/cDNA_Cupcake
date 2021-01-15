@@ -10,12 +10,13 @@ def find_Aend(seq, min_a_len=8):
     """
     Aseq = 'A'*min_a_len
     # will search for only the last 200 bp of the sequence
-    x = seq[-200:]
+    #Christine changed this to last 300bp b/c barcoding region is all on the 3' end and takes up 94 bp (linker sequences are long)
+    x = seq[-300:]
     j = x.rfind(Aseq)
 
     if j >= 0:
         # now find the beginning
-        end = len(seq)-200+j+min_a_len
+        end = len(seq)-300+j+min_a_len
         start = end-1
         while start >= 0 and seq[start]=='A':
             start -= 1
@@ -56,19 +57,29 @@ def clip_out(bam_filename, umi_len, bc_len, output_prefix, UMI_type, shortread_b
     5' primer -- BC --- UMI -- TSO --- GGG --- transcript --- polyA
 
     """
-    assert UMI_type in ('A3', 'G5', 'G5-10X')
+    assert UMI_type in ('A3', 'G5', 'G5-10X', 'SNARE')
     umi_bc_len = umi_len + bc_len
 
-    FIELDS = ['id', 'clip_len', 'extra', 'UMI', 'BC', 'BC_rev', 'BC_match', 'BC_top_rank']
-    if tso_len > 0: FIELDS += ['TSO']
 
-    f1 = open(output_prefix + '.trimmed.csv', 'w')
-    writer1 = DictWriter(f1, FIELDS, delimiter='\t')
-    writer1.writeheader()
 
     reader = pysam.AlignmentFile(bam_filename, 'rb', check_sq=False)
     #reader = BamIO.IndexedBamReader(bam_filename)
-    f2 = pysam.AlignmentFile(output_prefix+'.trimmed.bam', 'wb', header=reader.header)
+
+    #if running snare-seq need to separate out poly a and N6 into different bam files for isoseq3 refine step
+    if UMI_type=="SNARE":
+        FIELDS = ['id', 'extra1', 'BC1', 'extra2', 'BC2', 'BC3', 'UMI', 'extra3']
+        f1 =open(output_prefix + '.trimmed.csv', 'w')
+        writer1=DictWriter(f1, FIELDS, delimiter='\t')
+        writer1.writeheader()
+        f2=pysam.AlignmentFile(output_prefix + '_polyA.trimmed.bam', 'wb', header=reader.header)
+        f3=pysam.AlignmentFile(output_prefix + '_N6.trimmed.bam', 'wb', header=reader.header)
+    else:
+        FIELDS = ['id', 'clip_len', 'extra', 'UMI', 'BC', 'BC_rev', 'BC_match', 'BC_top_rank']
+        if tso_len > 0: FIELDS += ['TSO']
+        f1 = open(output_prefix + '.trimmed.csv', 'w')
+        writer1 = DictWriter(f1, FIELDS, delimiter='\t')
+        writer1.writeheader()
+        f2 = pysam.AlignmentFile(output_prefix+'.trimmed.bam', 'wb', header=reader.header)
 
     for r in reader:
         d = r.to_dict()
@@ -248,10 +259,118 @@ def clip_out(bam_filename, umi_len, bc_len, output_prefix, UMI_type, shortread_b
                 d['tags'] = new_tags
                 x = pysam.AlignedSegment.from_dict(d, r.header)
                 f2.write(x)
+        elif UMI_type =='SNARE':
+            L1_2="CGAATGCTCTGGCCTCTCAAGCACGTGGAT"
+            L2_3="AGTCGTACGCCGATGCGAAACATCGGCCAC"
+            A_start, A_end = find_Aend(d['seq'])
+            L1_2start = d['seq'].rfind(L1_2)
+            L2_3start = d['seq'].rfind(L2_3)
+            L1_2end = L1_2start + len(L1_2)
+            L2_3end = L2_3start + len(L2_3)
+            if L1_2start > 0 and L2_3start > 0 and L2_3start-L1_2end >= 8 and L2_3start-L1_2end <= 13 and len(d['seq'])-L2_3end >= 18 and len(d['seq'])-L2_3end <= 23: 
+                #checks that linkers are present and that they aren't too far apart from each other and that there is enough sequence for BC3 and UMI
+                if L1_2start < A_end:
+                    #if polyA is found after linkers, treat as N6 capture and not polyA
+                    A_end = -1 
+                if A_end < 0: #when there isn't a polyA, presumably N6 capture
+                    # look for the linker sequences to figure out where the barcode sequences are solely based on linker locations
+                    clip_start=L1_2start-bc_len
+                    BC1 = d['seq'][L1_2start-bc_len : L1_2start]
+                    extra1="NA"
+                    extra2len=L2_3start-L1_2end-bc_len
+                    if extra2len == 0: #no extra sequence between end of linkers
+                        extra2="NA"
+                    elif extra2len < 0:
+                        print(r.qname + "N6 : not enough bp between R1-R2 linker and R2-R3 linker for BC2")
+                        extra2="NA"
+                    else:
+                        extra2=d['seq'][L1_2end : L1_2end+extra2len]
+                    BC2 = d['seq'][L1_2end+extra2len : L1_2end+extra2len+bc_len]
+                    extra3len=len(d['seq'])-L2_3end-bc_len-umi_len
+                    if extra3len == 0: #no extra sequence between end of sequence and R2-R3 linker
+                        extra3="NA"
+                    elif extra3len < 0:
+                        print(r.qname + "N6 : not enough bp at end of read for BC3")
+                        extra3="NA"
+                    else:
+                        extra3=d['seq'][L2_3end+bc_len+umi_len:]
+                    BC3=d['seq'][L2_3end+extra3len : L2_3end+extra3len+bc_len]
+                    UMI=d['seq'][L2_3end+extra3len+bc_len : L2_3end+extra3len+bc_len+umi_len]
+                    
+                    rec={'id':r.qname, 'extra1':extra1, 'BC1':BC1, 'extra2':extra2, 'BC2':BC2, 'BC3':BC3, 'UMI':UMI, 'extra3':extra3}
+                    writer1.writerow(rec)
 
+                    d['seq']=d['seq'][:clip_start]
+                    d['qual']=d['qual'][:clip_start]
+                    assert len(d['seq'])==len(d['qual'])
+                    new_tags = []
+                    for tag in d['tags']:
+                        if tag.startswith('zs:B'): # defunct CCS tag, don't use
+                            pass
+                        elif tag.startswith('dq:i:') or tag.startswith('iq:i:') or tag.startswith('sq:i:'):
+                            tag = tag[:clip_start+5]
+                            new_tags.append(tag)
+                        else:
+                            new_tags.append(tag)
+                    d['tags'] = new_tags
+                    x = pysam.AlignedSegment.from_dict(d, r.header)
+                    f3.write(x)
+                else:
+                    #has a polyA and can use that in addition to linker as reference for bc and UMI
+                    if L1_2start-A_end >= 8 and L1_2start-A_end <= 13:
+                        extra1len=L1_2start-A_end-bc_len
+                        if extra1len < 0: #part of poly A is part of BC1 (starts with A)
+                            extra1="NA"
+                            clip_start=A_end+extra1len
+                        elif extra1len == 0:
+                            extra1="NA"
+                            clip_start=A_end
+                        else:
+                            extra1=d['seq'][A_end : A_end+extra1len]
+                            clip_start=A_end
+                        BC1=d['seq'][A_end+extra1len : A_end+extra1len+bc_len]
+                        extra2len=L2_3start-L1_2end-bc_len
+                        if extra2len == 0: #no extra sequence between end of linkers
+                            extra2="NA"
+                        elif extra2len < 0:
+                            print(r.qname + "polyA : not enough bp between R1-R2 linker and R2-R3 linker for BC2")
+                            extra2="NA"
+                        else:
+                            extra2=d['seq'][L1_2end : L1_2end+extra2len]
+                        BC2 = d['seq'][L1_2end+extra2len : L1_2end+extra2len+bc_len]
+                        extra3len=len(d['seq'])-L2_3end-bc_len-umi_len
+                        if extra3len == 0: #no extra sequence between end of sequence and R2-R3 linker
+                            extra3="NA"
+                        elif extra3len < 0:
+                            print(r.qname + "polyA : not enough bp at end of read for BC3")
+                            extra3="NA"
+                        else:
+                            extra3=d['seq'][L2_3end+bc_len+umi_len:]
+                        BC3=d['seq'][L2_3end+extra3len : L2_3end+extra3len+bc_len]
+                        UMI=d['seq'][L2_3end+extra3len+bc_len : L2_3end+extra3len+bc_len+umi_len]
+                    
+                        rec={'id':r.qname, 'extra1':extra1, 'BC1':BC1, 'extra2':extra2, 'BC2':BC2, 'BC3':BC3, 'UMI':UMI, 'extra3':extra3}
+                        writer1.writerow(rec)
+
+                        d['seq']=d['seq'][:clip_start]
+                        d['qual']=d['qual'][:clip_start]
+                        assert len(d['seq'])==len(d['qual'])
+                        new_tags = []
+                        for tag in d['tags']:
+                            if tag.startswith('zs:B'): # defunct CCS tag, don't use
+                                pass
+                            elif tag.startswith('dq:i:') or tag.startswith('iq:i:') or tag.startswith('sq:i:'):
+                                tag = tag[:clip_start+5]
+                                new_tags.append(tag)
+                            else:
+                                new_tags.append(tag)
+                        d['tags'] = new_tags
+                        x = pysam.AlignedSegment.from_dict(d, r.header)
+                        f2.write(x)
     f1.close()
     f2.close()
-
+    if UMI_type=="SNARE":
+        f3.close()
 
 if __name__ == "__main__":
     from argparse import ArgumentParser
@@ -261,7 +380,7 @@ if __name__ == "__main__":
     parser.add_argument("-u", "--umi_len", type=int, help="Length of UMI")
     parser.add_argument("-b", "--bc_len", type=int, help="Length of cell barcode")
     parser.add_argument("-t", "--tso_len", type=int, default=0, help="Length of TSO (for G5-10X only)")
-    parser.add_argument("--umi_type", choices=['A3', 'G5', 'G5-10X'], help="Location of the UMI")
+    parser.add_argument("--umi_type", choices=['A3', 'G5', 'G5-10X', 'SNARE'], help="Location of the UMI")
     parser.add_argument("--bc_rank_file", help="(Optional) cell barcode rank file from short read data")
 
 
