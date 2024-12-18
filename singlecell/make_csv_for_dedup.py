@@ -18,6 +18,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--input', '-i', default='dedup.fasta', help='Input dedup fasta file (default dedup.fasta)')
 parser.add_argument('--output', '-o', default='dedup.info.csv', help='Output dedup csv (default dedup.info.csv)')
 
+args=parser.parse_args()
 rex = re.compile('(\S+) full_length_coverage=(\d+);length=(\d+);XM=(\S+);XC=(\S+)')
 rex_switched = re.compile('(\S+) full_length_coverage=(\d+);length=(\d+);XC=(\S+);XM=(\S+)')
 rex_umi_only = re.compile('(\S+) full_length_coverage=(\d+);length=(\d+);XM=(\S+)')

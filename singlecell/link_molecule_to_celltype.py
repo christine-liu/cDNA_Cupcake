@@ -23,6 +23,9 @@ def main(bc_info_csv, input_csv, output_csv):
         if r['BCrev'] in bc_info:
             r['Celltype'] = bc_info[r['BCrev']]
             writer.writerow(r)
+        else:
+            r['Celltype']="NA"
+            writer.writerow(r)
     f.close()
     print(f"Output written to: {output_csv}")
 
